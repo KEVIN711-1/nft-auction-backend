@@ -18,7 +18,7 @@ func main() {
 	// ==================== 1. 配置加载阶段 ====================
 	// 对应文件: internal/config/config.go
 	log.Println("🚀 启动NFT拍卖后端系统...")
-	cfg := config.LoadConfig() // 从config.yaml加载所有配置
+	cfg := config.LoadConfig() // 从config.yaml加载所有配置 如合约地址、rpc_url 链接
 
 	// ==================== 2. 数据库初始化阶段 ====================
 	// 对应文件: pkg/database/gorm.go

@@ -29,12 +29,17 @@ func NewContractClient(rpcURL string) (*ContractClient, error) {
 	}
 
 	log.Printf("正在连接到以太坊节点: %s", rpcURL)
+	// ethclient.Dial: 连接到以太坊节点
+	// 参数: RPC URL (HTTP/WebSocket/IPC)
+	// 返回: *ethclient.Client 客户端连接实例
 	client, err := ethclient.Dial(rpcURL)
 	if err != nil {
 		return nil, fmt.Errorf("连接以太坊节点失败: %v", err)
 	}
 
 	// 测试连接
+	// client.NetworkID: 获取网络ID (1=主网, 5=Goerli, 11155111=Sepolia)
+	// context.Background(): 使用默认上下文
 	networkID, err := client.NetworkID(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("测试网络连接失败: %v", err)
@@ -61,10 +66,16 @@ func (c *ContractClient) GetLatestBlockNumber() (uint64, error) {
 		return 12345678, nil
 	}
 
+	// client.HeaderByNumber: 获取区块头信息
+	// 第一个参数: context.Context 上下文
+	// 第二个参数: *big.Int 区块号 (nil 表示最新区块)
+	// 返回: *types.Header 区块头信息
 	header, err := c.client.HeaderByNumber(context.Background(), nil)
 	if err != nil {
 		return 0, fmt.Errorf("获取区块信息失败: %v", err)
 	}
+	// header.Number: 区块号 (*big.Int 类型)
+	// .Uint64(): 转换为 uint64
 	return header.Number.Uint64(), nil
 }
 
@@ -87,7 +98,7 @@ func (c *ContractClient) GetMockAuctions() ([]struct {
 		{
 			AuctionID:     1,
 			Seller:        "0x1234567890123456789012345678901234567890",
-			StartingPrice: big.NewInt(1000000000000000000), // 1 ETH
+			StartingPrice: big.NewInt(1000000000000000000), // big.NewInt: 创建大整数，1 ETH = 10^18 wei
 			HighestBid:    big.NewInt(1200000000000000000), // 1.2 ETH
 			HighestBidder: "0x9876543210987654321098765432109876543210",
 		},
@@ -95,8 +106,8 @@ func (c *ContractClient) GetMockAuctions() ([]struct {
 			AuctionID:     2,
 			Seller:        "0x1111111111111111111111111111111111111111",
 			StartingPrice: big.NewInt(2500000000000000000), // 2.5 ETH
-			HighestBid:    big.NewInt(0),
-			HighestBidder: "",
+			HighestBid:    big.NewInt(0),                   // 0 表示暂无出价
+			HighestBidder: "",                              // 空字符串表示暂无出价者
 		},
 		{
 			AuctionID:     3,

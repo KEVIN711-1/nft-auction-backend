@@ -7,7 +7,14 @@ import (
 	"github.com/spf13/viper"
 )
 
+// 1. Viper 的键名映射规则
+// Viper 使用 mapstructure 标签进行映射。当没有明确指定标签时，Viper 有自动转换规则：
+// 它会将结构体字段名（大写驼峰）转换为小写蛇形（snake_case）
+// 比如：RPCURL → rpcurl → 进一步转换为配置文件中的 rpc_url
 // Config 全局配置结构体
+
+// mapstructure 标签
+// 用途：定义配置映射关系，告诉 mapstructure 库如何将配置文件映射到结构体。
 type Config struct {
 	Server     ServerConfig     `mapstructure:"server"`     // 服务器配置
 	Database   DatabaseConfig   `mapstructure:"database"`   // 数据库配置

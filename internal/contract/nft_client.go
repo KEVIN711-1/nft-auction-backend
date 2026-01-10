@@ -32,6 +32,7 @@ func NewNFTClient(rpcURL, contractAddress string) (*NFTClient, error) {
 	}
 
 	// 简化的ERC721 ABI（包含常用的方法）
+	// 替换为MyNFT.sol 的ABI
 	const erc721ABI = `[
 		{
 			"constant": true,
