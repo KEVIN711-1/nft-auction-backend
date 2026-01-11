@@ -1,0 +1,23 @@
+{
+  "name": "nft-auction-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KEVIN711-1/nft-auction-backend.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/KEVIN711-1/nft-auction-backend/issues"
+  },
+  "homepage": "https://github.com/KEVIN711-1/nft-auction-backend#readme",
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.4.0"
+  }
+}
