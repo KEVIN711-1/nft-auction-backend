@@ -35,7 +35,6 @@ func main() {
 	// ==================== 3. NFT客户端初始化 ====================
 	log.Println("正在初始化NFT客户端...")
 
-	var nftClient contract.NFTContract
 	var nftHandler *api.NFTHandler
 
 	// 检查必要的配置
@@ -47,13 +46,19 @@ func main() {
 		log.Fatal("❌ 请在 config.yaml 中配置 blockchain.nft_contract_address")
 	}
 
-	// 创建NFT客户端
-	nftClient, err = contract.NewNFTClient(cfg.Blockchain.RPCURL, cfg.Blockchain.NFTContractAddress)
+	// 初始化NFT客户端
+	nftClient, err := contract.NewNFTClient(cfg.Blockchain.RPCURL, cfg.Blockchain.NFTContractAddress)
 	if err != nil {
 		log.Fatalf("❌ NFT客户端初始化失败: %v", err)
 	}
-
 	log.Println("✅ NFT客户端初始化成功")
+
+	// 初始化拍卖客户端
+	auctionClient, err := contract.NewAuctionClient(cfg.Blockchain.RPCURL, cfg.Blockchain.AuctionContractAddress)
+	if err != nil {
+		log.Fatalf("❌ 拍卖客户端初始化失败: %v", err)
+	}
+	log.Println("✅ 拍卖客户端初始化成功")
 
 	// ==================== 4. 服务层初始化 ====================
 	// ┌─────────────┐    调用    ┌─────────────┐    调用    ┌─────────────┐
@@ -72,10 +77,9 @@ func main() {
 	nftService := service.NewNFTService(nftClient)
 	nftHandler = api.NewNFTHandler(nftService)
 
-	// 拍卖服务
-	auctionService := service.NewAuctionService(db, nftClient)
+	// 拍卖服务（传入两个客户端）
+	auctionService := service.NewAuctionService(db, nftClient, auctionClient)
 	auctionHandler := api.NewAuctionHandler(auctionService)
-
 	// ==================== 5. 测试连接 ====================
 	go func() {
 		time.Sleep(2 * time.Second)
