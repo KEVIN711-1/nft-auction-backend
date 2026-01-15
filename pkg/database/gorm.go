@@ -66,6 +66,7 @@ func autoMigrateTables(db *gorm.DB) error {
 	// 注册所有需要创建的表模型
 	// 使用interface{}类型切片，可以存放任意类型的模型指针
 	models := []interface{}{
+		&model.User{},
 		&model.Auction{}, // 拍卖表模型
 		&model.NFTInfo{}, // NFT信息表模型
 		// 可以添加更多表模型...

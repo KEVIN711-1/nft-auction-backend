@@ -7,6 +7,15 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+// /internal
+// ├── contract/          # 类比为 include/ 目录
+// │   └── contract.go  # 🔥 核心头文件！定义所有接口（类似 contract.h）
+// ├── client/
+// │   ├── nft_client.go      # 具体实现1（类似 nft_impl.c）
+// │   └── auction_client.go  # 具体实现2（类似 auction_impl.c）
+// └── service/
+//     └── nft_service.
+
 // ==================== NFT合约接口（不变）====================
 type NFTContract interface {
 	// 基本信息

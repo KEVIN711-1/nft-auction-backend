@@ -16,5 +16,5 @@ blockchain:
   
   #chain_id: 1  # 主网为 1，测试网如 Goerli 为 5
 
-  # 先留空或者填一个假的，因为我们先测试NFT合约
-  auction_contract_address: "0x0000000000000000000000000000000000000000"
+  auction_contract_address: "0x31bd1bb81c9cc24de83aa1e616ae4380ebc6ff70"
+  #hash 0x0cfe192caa09440804fed7d9020d4f39ef177861a4fc89637b9be0c1d8f2d1b3

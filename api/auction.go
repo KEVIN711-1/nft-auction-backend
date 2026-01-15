@@ -26,6 +26,7 @@ func NewAuctionHandler(auctionService *service.AuctionService) *AuctionHandler {
 // GetAuctions 获取所有拍卖（分页）
 func (h *AuctionHandler) GetAuctions(c *gin.Context) {
 	// 获取分页参数
+	// ?page=1&page_size=2
 	pageStr := c.DefaultQuery("page", "1")
 	pageSizeStr := c.DefaultQuery("page_size", "20")
 

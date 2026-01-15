@@ -15,4 +15,4 @@ blockchain:
   nft_contract_address: "0x98628036b9759Da6dE7F1516136284eBB09fA052"
   
   # 先留空或者填一个假的，因为我们先测试NFT合约
-  auction_contract_address: "0x0000000000000000000000000000000000000000"
+  auction_contract_address: "0x31bd1bb81c9cc24de83aa1e616ae4380ebc6ff70"

@@ -2,6 +2,8 @@ package model
 
 import (
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // mapstructure 标签
@@ -40,6 +42,16 @@ type NFTInfo struct {
 	LastSyncTime    time.Time `gorm:"comment:最后同步时间"`                          // comment: 数据库字段注释，记录最后同步时间
 	CreatedAt       time.Time `gorm:"autoCreateTime"`                          // autoCreateTime: 自动设置创建时间
 	UpdatedAt       time.Time `gorm:"autoUpdateTime"`                          // autoUpdateTime: 自动更新时间
+}
+
+// User 用户模型
+type User struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	Username  string         `gorm:"uniqueIndex;size:100;not null" json:"username"`
+	Password  string         `gorm:"not null" json:"-"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // TableName 指定表名（如果未指定，GORM默认使用结构体名的复数形式）
