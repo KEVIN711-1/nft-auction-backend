@@ -52,6 +52,8 @@ type NFTClient struct {
 
 // NewNFTClient 创建新的 NFT 客户端
 func NewNFTClient(rpcURL string, contractAddress string) (*NFTClient, error) {
+	log.Printf("正在连接到以太坊节点（NFT合约）: %s", rpcURL)
+
 	client, err := ethclient.Dial(rpcURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Ethereum client: %v", err)
@@ -63,11 +65,25 @@ func NewNFTClient(rpcURL string, contractAddress string) (*NFTClient, error) {
 		return nil, fmt.Errorf("failed to instantiate contract: %v", err)
 	}
 
+	// 测试连接
+	networkID, err := client.NetworkID(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("测试网络连接失败: %v", err)
+	}
+
+	log.Printf("✅ NFT合约连接成功，网络ID: %v", networkID)
+	log.Printf("✅ NFT合约地址: %s", address.Hex())
+
 	return &NFTClient{
 		client:   client,
 		contract: contract,
 		address:  address,
 	}, nil
+}
+
+// GetContractAddress 获取合约地址 - 🔥 新增方法
+func (c *NFTClient) GetContractAddress() common.Address {
+	return c.address
 }
 
 // GetName 获取合约名称
@@ -101,19 +117,25 @@ func (c *NFTClient) CheckOwner(ctx context.Context, tokenID *big.Int, address st
 	return owner.Hex() == checkAddr.Hex(), nil
 }
 
-// TransferFrom 转移 NFT（需要已授权）
-func (c *NFTClient) TransferFrom(ctx context.Context, from, to common.Address, tokenID *big.Int) error {
-	// 这里需要私钥签名交易
-	// 实际实现需要配置私钥
-	log.Printf("Transfer NFT %s from %s to %s", tokenID.String(), from.Hex(), to.Hex())
-	return nil
-}
-
 // GetTotalSupply 获取总供应量（需要合约支持）
 func (c *NFTClient) GetTotalSupply(ctx context.Context) (*big.Int, error) {
-	// 注意：你的合约目前没有 totalSupply 函数
-	// 如果需要，可以在合约中添加
-	return big.NewInt(0), nil
+	maxTokenID := big.NewInt(10) // 设置一个合理的上限
+
+	foundCount := big.NewInt(0)
+
+	for i := int64(1); i < maxTokenID.Int64(); i++ {
+		tokenID := big.NewInt(i)
+
+		// 检查NFT是否存在
+		exists, _ := c.CheckIfMinted(ctx, tokenID)
+		if exists {
+			foundCount.Add(foundCount, big.NewInt(1))
+		} else {
+			break
+		}
+	}
+
+	return foundCount, nil
 }
 
 // GetBalanceOf 获取地址拥有的 NFT 数量

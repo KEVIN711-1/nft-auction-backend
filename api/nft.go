@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"nft-auction-backend/internal/service"
 
@@ -19,7 +20,6 @@ func NewNFTHandler(service *service.NFTService) *NFTHandler {
 
 // GetNFTInfo 获取NFT信息
 func (h *NFTHandler) GetNFTInfo(c *gin.Context) {
-	ctx := c.Request.Context()
 
 	tokenID := c.Param("id")
 	if tokenID == "" {
@@ -30,7 +30,9 @@ func (h *NFTHandler) GetNFTInfo(c *gin.Context) {
 	}
 
 	// 调用服务层获取NFT信息
-	info, err := h.service.GetNFTInfo(ctx, tokenID)
+	contractAddr := h.service.GetContractAddress()
+
+	info, err := h.service.GetNFT(contractAddr, tokenID)
 	if err != nil {
 		// 根据错误类型返回不同的状态码
 		if strings.Contains(err.Error(), "does not exist") ||
@@ -142,50 +144,21 @@ func (h *NFTHandler) ValidateOwnership(c *gin.Context) {
 	})
 }
 
-// GetContractInfo 获取合约信息（新端点）
-func (h *NFTHandler) GetContractInfo(c *gin.Context) {
+// SyncAuctions 手动同步拍卖数据（管理用）
+func (h *NFTHandler) SyncNFTInfo(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	// 尝试获取一个NFT来间接获取合约信息
-	// 因为我们的服务没有直接暴露client
-	tokenID := "1" // 使用tokenID 1进行测试
-
-	info, err := h.service.GetNFTInfo(ctx, tokenID)
-	if err != nil {
-		// 如果获取失败，可能NFT 1不存在，尝试其他方式
-		// 这里我们返回一个基本响应
-		c.JSON(http.StatusOK, gin.H{
-			"name":   "KevinNFT",
-			"symbol": "KFT",
-			"note":   "Contract info fetched from KevinNFT smart contract",
-			"status": "connected",
+	if err := h.service.SyncAllNFTs(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "同步失败: " + err.Error(),
 		})
 		return
 	}
 
-	// 如果成功获取到NFT信息，提取合约信息
 	c.JSON(http.StatusOK, gin.H{
-		"name":   info.ContractName,
-		"symbol": info.ContractSymbol,
-		"status": "connected",
-		"example_nft": gin.H{
-			"token_id": info.TokenID,
-			"owner":    info.Owner,
-			"exists":   info.IsMinted,
-		},
-	})
-}
-
-// SyncNFTInfo 同步NFT信息（兼容旧接口）
-func (h *NFTHandler) SyncNFTInfo(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"message": "NFT information is fetched in real-time from the blockchain",
-		"status":  "active",
-		"endpoints": gin.H{
-			"get_nft_info":       "GET /api/nfts/{token_id}",
-			"get_owner":          "GET /api/nfts/{token_id}/owner",
-			"validate_ownership": "GET /api/nfts/{token_id}/validate/{address}",
-			"get_contract_info":  "GET /api/nfts/contract/info",
-		},
+		"success":   true,
+		"message":   "拍卖数据同步完成",
+		"timestamp": time.Now().Unix(),
 	})
 }

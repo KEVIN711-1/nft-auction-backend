@@ -21,6 +21,8 @@ type NFTContract interface {
 	// 基本信息
 	GetName(ctx context.Context) (string, error)
 	GetSymbol(ctx context.Context) (string, error)
+	GetContractAddress() common.Address                   // 🔥 新增：获取合约地址方法
+	GetTotalSupply(ctx context.Context) (*big.Int, error) // 获取 NFT 总量
 
 	// NFT 查询
 	GetOwner(ctx context.Context, tokenID *big.Int) (common.Address, error)
@@ -30,9 +32,6 @@ type NFTContract interface {
 
 	// 验证
 	CheckOwner(ctx context.Context, tokenID *big.Int, address string) (bool, error)
-
-	// 转账
-	TransferFrom(ctx context.Context, from, to common.Address, tokenID *big.Int) error
 }
 
 // ==================== 拍卖合约接口（新增）====================
@@ -58,16 +57,5 @@ type AuctionContract interface {
 	GetAdmin(ctx context.Context) (common.Address, error)
 	IsTokenAllowed(ctx context.Context, tokenAddress common.Address) (bool, error)
 
-	// 交易方法（需要签名）
-	PlaceBidETH(ctx context.Context, auctionID *big.Int, amount *big.Int) error
-	PlaceBidERC20(ctx context.Context, auctionID *big.Int, amount *big.Int) error
-	EndAuction(ctx context.Context, auctionID *big.Int) error
-	CreateAuctionETH(ctx context.Context, duration *big.Int, startPrice *big.Int,
-		nftAddress common.Address, tokenID *big.Int) error
-	CreateAuctionERC20(ctx context.Context, duration *big.Int, startPrice *big.Int,
-		nftAddress common.Address, tokenID *big.Int, erc20Token common.Address) error
-
-	// 状态检查
-	IsActive() bool
 	GetContractAddress() common.Address
 }

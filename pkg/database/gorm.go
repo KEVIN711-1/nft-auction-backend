@@ -69,6 +69,10 @@ func autoMigrateTables(db *gorm.DB) error {
 		&model.User{},
 		&model.Auction{}, // 拍卖表模型
 		&model.NFTInfo{}, // NFT信息表模型
+		// &model.Bid{},        //
+		// &model.EventSync{},  // 新增
+		// &model.BidHistory{}, // 新增
+
 		// 可以添加更多表模型...
 	}
 

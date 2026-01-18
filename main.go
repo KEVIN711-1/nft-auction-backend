@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -22,6 +25,16 @@ var (
 	tokenMutex  = &sync.RWMutex{}
 )
 
+// 用户浏览NFT市场
+//
+//	↓
+//
+// API网关 → 查询数据库（Redis缓存）← 返回数据（<100ms）
+//
+//	        ↑
+//	监听服务（监听链上事件）
+//	        ↑
+//	   区块链节点
 func main() {
 	// ==================== 1. 配置加载阶段 ====================
 	log.Println("🚀 启动NFT拍卖后端系统...")
@@ -86,34 +99,31 @@ func main() {
 	// ✅ 拍卖信息存数据库 → 因为需要历史记录和复杂查询
 	// ✅ 混合架构 → 区块链应用的最佳实践
 	// NFT服务
-	nftService := service.NewNFTService(nftClient)
+	nftService := service.NewNFTService(db, nftClient)
 	nftHandler = api.NewNFTHandler(nftService)
 
 	// 拍卖服务（传入两个客户端）
-	auctionService := service.NewAuctionService(db, nftClient, auctionClient)
+	auctionService := service.NewAuctionService(db, auctionClient)
 	auctionHandler := api.NewAuctionHandler(auctionService)
-	// ==================== 5. 测试连接 ====================
-	go func() {
-		time.Sleep(2 * time.Second)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
 
-		// 测试获取合约信息
-		name, err := nftClient.GetName(ctx)
-		if err != nil {
-			log.Printf("⚠️  测试连接失败 - 无法获取合约名称: %v", err)
-		} else {
-			log.Printf("✅ 合约连接正常 - 名称: %s", name)
+	// ==================== 5.区块链监听器初始化 ====================
+	log.Println("🔍 初始化区块链事件监听器...")
 
-			// 测试获取symbol
-			symbol, err := nftClient.GetSymbol(ctx)
-			if err != nil {
-				log.Printf("⚠️  无法获取合约符号: %v", err)
-			} else {
-				log.Printf("✅ 合约符号: %s", symbol)
-			}
-		}
-	}()
+	// ⭐ 重要：初始化区块链监听器，传入拍卖服务
+	// 传入 rpcURL、NFTClient、AuctionClient、服务
+	blockchainListener := service.NewBlockchainListener(
+		nftClient,             // NFT 合约客户端
+		auctionClient,         // 拍卖合约客户端
+		nftService,            // NFT Service
+		auctionService,        // Auction Service
+		cfg.Blockchain.RPCURL, // RPC URL
+	)
+	// 启动监听器（使用后台context）
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	blockchainListener.Start(ctx)
+	log.Println("✅ 区块链事件监听器已启动")
 
 	// ==================== 6. Web服务器路由设置 ====================
 	router := gin.Default()
@@ -167,14 +177,25 @@ func main() {
 
 	// 系统信息
 	router.GET("/api/info", func(c *gin.Context) {
+		// listenerStatus := blockchainListener.GetStatus()
+		// eventStats := blockchainListener.GetEventStats()
+
 		c.JSON(200, gin.H{
 			"service": "NFT Auction Marketplace",
 			"version": "1.0.0",
+			"features": gin.H{
+				"blockchain_listener": true,
+				"real_time_sync":      true,
+				// "polling_interval":    blockchainListener.GetPollInterval().String(),
+			},
+			// "listener": listenerStatus,
+			// "stats":    eventStats,
 			"config": gin.H{
-				"port":         cfg.Server.Port,
-				"database":     cfg.Database.Path,
-				"rpc_url":      cfg.Blockchain.RPCURL,
-				"nft_contract": cfg.Blockchain.NFTContractAddress,
+				"port":             cfg.Server.Port,
+				"database":         cfg.Database.Path,
+				"rpc_url":          cfg.Blockchain.RPCURL,
+				"nft_contract":     cfg.Blockchain.NFTContractAddress,
+				"auction_contract": cfg.Blockchain.AuctionContractAddress,
 			},
 			"timestamp": time.Now().Format("2006-01-02 15:04:05"),
 		})
@@ -190,26 +211,66 @@ func main() {
 	// c.GetHeader("X-ID")	请求头参数	X-ID: 123	Headers 标签页
 	// c.ShouldBindJSON(&obj)	JSON 请求体	{"id": "123"}	Body (raw JSON)
 
-	// 拍卖相关API
+	// ==================== 公开的拍卖查询API ====================
+	// 根据交易哈希查询拍卖
+	router.GET("/api/auctions/by-tx", auctionHandler.CheckAuctionStatus)
+
+	// 检查拍卖状态（前端轮询）
+	router.GET("/api/auctions/:id/status", auctionHandler.CheckAuctionStatus)
+
+	// 拍卖列表和详情（公开）
+	router.GET("/api/auctions", auctionHandler.GetAuctions)
+	router.GET("/api/auctions/active", auctionHandler.GetActiveAuctions)
+	router.GET("/api/auctions/count", auctionHandler.GetAuctionCount)
+	router.GET("/api/auctions/:id", auctionHandler.GetAuction)
+	router.GET("/api/auctions/:id/bids", auctionHandler.GetAuctionBids)
+	router.GET("/api/auctions/:id/validate", auctionHandler.ValidateAuction)
+
+	// NFT相关API（公开）
+	router.GET("/api/nfts/:id", nftHandler.GetNFTInfo)
+	router.GET("/api/nfts/:id/owner", nftHandler.GetNFTOwner)
+	router.GET("/api/nfts/:id/validate/:address", nftHandler.ValidateOwnership)
+
+	// ==================== 需要认证的API ====================
 	auth.Use(authCheck) // 检查是否登录
 	{
-		// 新增：用户相关API（需要认证）
+		// 用户相关API
 		auth.GET("/user/profile", userHandler.GetProfile)
 
-		router.GET("/api/auctions", auctionHandler.GetAuctions)
-		router.GET("/api/auctions/active", auctionHandler.GetActiveAuctions)
-		router.GET("/api/auctions/:id", auctionHandler.GetAuction)
-		router.POST("/api/auctions", auctionHandler.CreateAuction)
-		router.POST("/api/auctions/:id/bid", auctionHandler.PlaceBid)
-		router.POST("/api/auctions/:id/end", auctionHandler.EndAuction)
-		router.POST("/api/auctions/sync", auctionHandler.SyncAuctions)
+		// 管理API
+		auth.POST("/auctions/sync", auctionHandler.SyncAuctions)
+		auth.POST("/nft/sync", nftHandler.SyncNFTInfo)
 
-		// NFT相关API
-		router.GET("/api/nfts/:id", nftHandler.GetNFTInfo)
-		router.GET("/api/nfts/:id/owner", nftHandler.GetNFTOwner)
-		router.GET("/api/nfts/:id/validate/:address", nftHandler.ValidateOwnership)
-		router.GET("/api/nfts/contract/info", nftHandler.GetContractInfo)
-		router.POST("/api/nft/sync", nftHandler.SyncNFTInfo)
+		// 监听器控制API（需要认证）
+		auth.POST("/listener/restart", func(c *gin.Context) {
+			// 停止当前监听器
+			blockchainListener.Stop()
+			time.Sleep(1 * time.Second)
+
+			// 重新启动
+			blockchainListener.Start(ctx)
+
+			c.JSON(200, gin.H{
+				"success":   true,
+				"message":   "区块链监听器已重启",
+				"timestamp": time.Now().Unix(),
+			})
+		})
+
+		auth.POST("/listener/force-sync", func(c *gin.Context) {
+			// 强制全量同步
+			go func() {
+				if err := auctionService.SyncAllAuctions(ctx); err != nil {
+					log.Printf("强制同步失败: %v", err)
+				}
+			}()
+
+			c.JSON(200, gin.H{
+				"success":   true,
+				"message":   "已触发全量同步，请稍后查看结果",
+				"timestamp": time.Now().Unix(),
+			})
+		})
 	}
 
 	// ==================== 7. 服务器启动 ====================
@@ -239,10 +300,33 @@ func main() {
 	log.Println("  GET  /api/nfts/contract/info        - 获取合约信息") //?
 	log.Println("========================================")
 
+	// 优雅关闭处理
+	setupGracefulShutdown(cancel)
+
 	// 启动HTTP服务器
 	if err := router.Run(addr); err != nil {
 		log.Fatal("服务启动失败:", err)
 	}
+}
+func setupGracefulShutdown(cancel context.CancelFunc) {
+	// 监听系统信号
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-quit
+		log.Printf("收到关闭信号: %v", sig)
+
+		// 执行优雅关闭
+		log.Println("正在停止区块链监听器...")
+		cancel() // 这会触发监听器的停止
+
+		// 等待一小段时间确保监听器完全停止
+		time.Sleep(2 * time.Second)
+
+		log.Println("系统已优雅关闭")
+		os.Exit(0)
+	}()
 }
 
 // 登录检查中间件（与你的博客系统一致）

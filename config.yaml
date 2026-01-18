@@ -9,10 +9,11 @@ database:
 # 区块链配置
 blockchain:
   # Infura Sepolia测试网
-  rpc_url: "https://sepolia.infura.io/v3/c5daace64d64444790a8d4bdd7c027a6"
-  
+  # rpc_url: "https://sepolia.infura.io/v3/c5daace64d64444790a8d4bdd7c027a6"
+  rpc_url: "wss://sepolia.infura.io/ws/v3/c5daace64d64444790a8d4bdd7c027a6"
+
   # 你的NFT合约地址（在Sepolia上）
   nft_contract_address: "0x98628036b9759Da6dE7F1516136284eBB09fA052"
   
-  # 先留空或者填一个假的，因为我们先测试NFT合约
+  # 我的nft 拍卖市场合约
   auction_contract_address: "0x31bd1bb81c9cc24de83aa1e616ae4380ebc6ff70"

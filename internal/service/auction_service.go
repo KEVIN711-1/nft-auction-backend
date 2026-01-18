@@ -1,3 +1,4 @@
+// auction_service.go
 package service
 
 import (
@@ -5,192 +6,190 @@ import (
 	"fmt"
 	"log"
 	"math/big"
-	"strconv"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"gorm.io/gorm"
 
 	"nft-auction-backend/internal/contract"
 	"nft-auction-backend/internal/model"
 )
 
-// AuctionService 拍卖服务
+// AuctionService 拍卖服务（只读，不包含需要gas的操作）
 type AuctionService struct {
 	DB              *gorm.DB
-	NFTContract     contract.NFTContract
 	AuctionContract contract.AuctionContract
 }
 
 // NewAuctionService 创建拍卖服务
-func NewAuctionService(db *gorm.DB, nftContract contract.NFTContract, auctionContract contract.AuctionContract) *AuctionService {
+func NewAuctionService(db *gorm.DB, auctionContract contract.AuctionContract) *AuctionService {
 	return &AuctionService{
 		DB:              db,
-		NFTContract:     nftContract,
 		AuctionContract: auctionContract,
 	}
 }
 
-// CreateAuction 创建拍卖（包含链上和数据库）
-func (s *AuctionService) CreateAuction(auction *model.Auction) error {
-	ctx := context.Background()
+// ==================== 数据库操作 ====================
 
-	// 1. 验证NFT所有权
-	if s.NFTContract != nil {
-		// 解析TokenID（string -> int64）
-		tokenIDInt, err := strconv.ParseInt(auction.TokenID, 10, 64)
-		if err != nil {
-			return fmt.Errorf("无效的TokenID格式: %s, 错误: %v", auction.TokenID, err)
-		}
-
-		tokenID := big.NewInt(tokenIDInt)
-		isOwner, err := s.NFTContract.CheckOwner(ctx, tokenID, auction.Seller)
-		if err != nil {
-			return fmt.Errorf("验证NFT所有权失败: %v", err)
-		}
-		if !isOwner {
-			return fmt.Errorf("用户 %s 不是 NFT #%s 的所有者", auction.Seller, auction.TokenID)
-		}
+// SaveAuction 保存或更新拍卖到数据库
+func (s *AuctionService) SaveAuction(auction *model.Auction) error {
+	if auction == nil {
+		return fmt.Errorf("拍卖信息为空")
 	}
 
-	// 2. 调用拍卖合约创建拍卖（链上）
-	if s.AuctionContract != nil && s.AuctionContract.IsActive() {
-		// 将字符串参数转换为合约需要的类型
-		duration := big.NewInt(int64(auction.EndTime - auction.StartTime)) // 计算持续时间
+	var existing model.Auction
+	result := s.DB.Where("auction_id = ?", auction.AuctionID).First(&existing)
+	now := time.Now()
 
-		startPrice, ok := new(big.Int).SetString(auction.StartingPrice, 10)
-		if !ok {
-			return fmt.Errorf("无效的起拍价格式: %s", auction.StartingPrice)
-		}
-
-		tokenIDInt, _ := strconv.ParseInt(auction.TokenID, 10, 64)
-		nftAddress := common.HexToAddress(auction.NFTContract)
-
-		// 调用合约创建拍卖（ETH拍卖）
-		err := s.AuctionContract.CreateAuctionETH(ctx, duration, startPrice, nftAddress, big.NewInt(tokenIDInt))
-		if err != nil {
-			log.Printf("警告: 链上创建拍卖失败（继续保存到数据库）: %v", err)
-			// 不返回错误，继续保存到数据库（模拟模式或测试时）
-		}
-	}
-
-	// 3. 保存到数据库
-	auction.CreatedAt = time.Now()
-	auction.UpdatedAt = time.Now()
-
-	// 如果Ended字段未设置，默认为false
-	// 如果EndTime未设置，根据StartTime和默认持续时间计算
-	if auction.EndTime == 0 && auction.StartTime > 0 {
-		auction.EndTime = auction.StartTime + 86400 // 默认24小时
-	}
-
-	result := s.DB.Create(auction)
 	if result.Error != nil {
-		return result.Error
+		// 新记录
+		auction.CreatedAt = now
+		auction.UpdatedAt = now
+
+		if err := s.DB.Create(auction).Error; err != nil {
+			return fmt.Errorf("创建拍卖失败: %v", err)
+		}
+		log.Printf("✅ 新增拍卖 #%d", auction.AuctionID)
+	} else {
+		// 更新现有记录
+		existing.NFTContract = auction.NFTContract
+		existing.TokenID = auction.TokenID
+		existing.Seller = auction.Seller
+		existing.StartingPrice = auction.StartingPrice
+		existing.HighestBid = auction.HighestBid
+		existing.HighestBidder = auction.HighestBidder
+		existing.StartTime = auction.StartTime
+		existing.EndTime = auction.EndTime
+		existing.Ended = auction.Ended
+		existing.Status = auction.Status
+		existing.UpdatedAt = now
+
+		if err := s.DB.Save(&existing).Error; err != nil {
+			return fmt.Errorf("更新拍卖失败: %v", err)
+		}
+		log.Printf("🔄 更新拍卖 #%d", auction.AuctionID)
 	}
 
-	log.Printf("拍卖创建成功: 数据库ID=%d, AuctionID=%d, TokenID=%s",
-		auction.ID, auction.AuctionID, auction.TokenID)
 	return nil
 }
 
-// SyncAuctions 同步链上拍卖数据到数据库
-func (s *AuctionService) SyncAuctions() error {
-	if s.AuctionContract == nil || !s.AuctionContract.IsActive() {
-		log.Println("拍卖合约未激活，跳过同步")
+// SaveBidHistory 保存出价历史记录
+func (s *AuctionService) SaveBidHistory(bid *model.BidHistory) error {
+	if bid == nil {
+		return fmt.Errorf("出价记录为空")
+	}
+
+	// 检查是否已存在（根据交易哈希）
+	var existing model.BidHistory
+	if err := s.DB.Where("tx_hash = ?", bid.TxHash).First(&existing).Error; err == nil {
+		// 已存在，更新
+		existing.Amount = bid.Amount
+		existing.Status = bid.Status
+		existing.BlockNumber = bid.BlockNumber
+		existing.BlockTime = bid.BlockTime
+		existing.UpdatedAt = time.Now()
+
+		if err := s.DB.Save(&existing).Error; err != nil {
+			return fmt.Errorf("更新出价记录失败: %v", err)
+		}
 		return nil
 	}
 
-	ctx := context.Background()
+	// 新记录
+	now := time.Now()
+	bid.CreatedAt = now
+	bid.UpdatedAt = now
 
+	if err := s.DB.Create(bid).Error; err != nil {
+		return fmt.Errorf("创建出价记录失败: %v", err)
+	}
+
+	log.Printf("✅ 保存出价记录: AuctionID=%d, Bidder=%s", bid.AuctionID, bid.Bidder)
+	return nil
+}
+
+// ==================== 链上查询方法 ====================
+
+// GetAuctionFromChain 从区块链获取拍卖信息（适配你的接口）
+func (s *AuctionService) GetAuctionFromChain(ctx context.Context, auctionID uint64) (*model.Auction, error) {
+	// 使用 GetAuctionInfo 方法获取拍卖信息
+	seller, duration, startPrice, startTime, ended, highestBidder, highestBid,
+		nftContract, tokenId, _, _, _, err :=
+		s.AuctionContract.GetAuctionInfo(ctx, big.NewInt(int64(auctionID)))
+
+	if err != nil {
+		return nil, fmt.Errorf("从链上获取拍卖失败: %v", err)
+	}
+
+	// 计算结束时间
+	endTime := big.NewInt(0)
+	if startTime != nil && duration != nil {
+		endTime = new(big.Int).Add(startTime, duration)
+	}
+
+	// 判断状态
+	status := "active"
+	if ended {
+		status = "ended"
+	} else if time.Now().Unix() > endTime.Int64() {
+		status = "expired"
+	} else if auctionID == 0 { // 特殊处理拍卖ID为0的情况
+		status = "active"
+	}
+
+	auction := &model.Auction{
+		AuctionID:     auctionID,
+		NFTContract:   nftContract.Hex(),
+		TokenID:       tokenId.String(),
+		Seller:        seller.Hex(),
+		StartingPrice: startPrice.String(),
+		HighestBid:    highestBid.String(),
+		HighestBidder: highestBidder.Hex(),
+		StartTime:     uint64(startTime.Int64()),
+		EndTime:       uint64(endTime.Int64()),
+		Ended:         ended,
+		Status:        status,
+	}
+
+	return auction, nil
+}
+
+// SyncAllAuctions 同步所有拍卖数据到数据库
+func (s *AuctionService) SyncAllAuctions(ctx context.Context) error {
 	// 获取拍卖总数
 	count, err := s.AuctionContract.GetAuctionCount(ctx)
 	if err != nil {
 		return fmt.Errorf("获取拍卖数量失败: %v", err)
 	}
 
-	log.Printf("开始同步拍卖数据，链上拍卖总数: %s", count.String())
+	log.Printf("开始同步拍卖数据，链上拍卖总数: %d", count.Int64())
 
-	// 遍历所有拍卖
-	for i := uint64(0); i < count.Uint64(); i++ {
-		auctionID := big.NewInt(int64(i))
+	successCount := 0
+	// 从0开始，因为你的拍卖ID从0开始
+	for i := int64(0); i < count.Int64(); i++ {
+		auctionID := uint64(i)
 
-		// 获取拍卖信息
-		// seller, duration, startPrice, startTime, ended, highestBidder, highestBid,
-		// 	nftContract, tokenId, tokenAddress, bidTokenAmount, timeRemaining, err :=
-		// 	s.AuctionContract.GetAuctionInfo(ctx, auctionID)
-		// 获取拍卖信息 - 使用下划线忽略不需要的返回值
-		seller, duration, startPrice, startTime, ended, highestBidder, highestBid,
-			nftContract, tokenId, _, _, _, err :=
-			s.AuctionContract.GetAuctionInfo(ctx, auctionID)
-
+		// 从链上获取拍卖信息
+		auction, err := s.GetAuctionFromChain(ctx, auctionID)
 		if err != nil {
-			log.Printf("获取拍卖 #%d 信息失败: %v", i, err)
+			log.Printf("❌ 获取拍卖 #%d 信息失败: %v", auctionID, err)
 			continue
 		}
 
-		// 构建拍卖记录 - 根据你的模型字段
-		auction := &model.Auction{
-			AuctionID:     i,
-			NFTContract:   nftContract.Hex(),
-			TokenID:       tokenId.String(),
-			Seller:        seller.Hex(),
-			StartingPrice: startPrice.String(),
-			HighestBid:    highestBid.String(),
-			HighestBidder: highestBidder.Hex(),
-			StartTime:     startTime.Uint64(),
-			Ended:         ended,
+		// 保存到数据库
+		if err := s.SaveAuction(auction); err == nil {
+			successCount++
+			log.Printf("✅ 同步拍卖 #%d: NFT=%s/%s, 最高出价=%s",
+				auctionID, auction.NFTContract, auction.TokenID, auction.HighestBid)
+		} else {
+			log.Printf("❌ 保存拍卖 #%d 失败: %v", auctionID, err)
 		}
-
-		// 计算结束时间
-		if startTime != nil && duration != nil {
-			auction.EndTime = startTime.Uint64() + duration.Uint64()
-		}
-
-		// 检查并保存到数据库
-		s.saveOrUpdateAuction(auction, i)
 	}
 
-	log.Printf("拍卖数据同步完成，处理了 %s 个拍卖", count.String())
+	log.Printf("✅ 拍卖同步完成，成功同步: %d/%d", successCount, count.Int64())
 	return nil
 }
 
-// saveOrUpdateAuction 保存或更新拍卖到数据库
-func (s *AuctionService) saveOrUpdateAuction(auction *model.Auction, auctionID uint64) {
-	var existingAuction model.Auction
-	result := s.DB.Where("auction_id = ?", auctionID).First(&existingAuction)
-
-	now := time.Now()
-
-	if result.Error == gorm.ErrRecordNotFound {
-		// 创建新记录
-		auction.CreatedAt = now
-		auction.UpdatedAt = now
-		if err := s.DB.Create(auction).Error; err != nil {
-			log.Printf("创建拍卖 #%d 失败: %v", auctionID, err)
-		} else {
-			log.Printf("新增拍卖 #%d", auctionID)
-		}
-	} else {
-		// 更新现有记录
-		existingAuction.NFTContract = auction.NFTContract
-		existingAuction.TokenID = auction.TokenID
-		existingAuction.Seller = auction.Seller
-		existingAuction.StartingPrice = auction.StartingPrice
-		existingAuction.HighestBid = auction.HighestBid
-		existingAuction.HighestBidder = auction.HighestBidder
-		existingAuction.StartTime = auction.StartTime
-		existingAuction.EndTime = auction.EndTime
-		existingAuction.Ended = auction.Ended
-		existingAuction.UpdatedAt = now
-
-		if err := s.DB.Save(&existingAuction).Error; err != nil {
-			log.Printf("更新拍卖 #%d 失败: %v", auctionID, err)
-		} else {
-			log.Printf("更新拍卖 #%d", auctionID)
-		}
-	}
-}
+// ==================== 查询方法 ====================
 
 // GetAuctionByID 根据数据库ID获取拍卖
 func (s *AuctionService) GetAuctionByID(id uint) (*model.Auction, error) {
@@ -212,100 +211,106 @@ func (s *AuctionService) GetAuctionByAuctionID(auctionID uint64) (*model.Auction
 	return &auction, nil
 }
 
-// GetActiveAuctions 获取所有活跃拍卖（未结束且未过期）
+// GetAuctionByTxHash 根据交易哈希获取拍卖（用于前端提交后查询）
+func (s *AuctionService) GetAuctionByTxHash(txHash string) (*model.Auction, error) {
+	var auction model.Auction
+	result := s.DB.Where("tx_hash = ?", txHash).First(&auction)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &auction, nil
+}
+
+// GetActiveAuctions 获取所有活跃拍卖
 func (s *AuctionService) GetActiveAuctions() ([]model.Auction, error) {
 	var auctions []model.Auction
 	currentTime := uint64(time.Now().Unix())
+	log.Printf("✅ ----currentTime=%d ", currentTime)
 
-	result := s.DB.Where("ended = ? AND end_time > ?", false, currentTime).Find(&auctions)
+	result := s.DB.Where("ended = ? AND end_time > ?", false, currentTime).
+		Order("created_at DESC").
+		Find(&auctions)
+
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	return auctions, nil
 }
 
-// PlaceBid 出价（链上+数据库）
-func (s *AuctionService) PlaceBid(auctionID uint, bidder string, amount *big.Int) error {
-	// 1. 获取拍卖信息
-	var auction model.Auction
-	if err := s.DB.First(&auction, auctionID).Error; err != nil {
-		return err
-	}
+// GetAuctionBids 获取拍卖的出价历史
+func (s *AuctionService) GetAuctionBids(auctionID uint64, page, pageSize int) ([]model.BidHistory, int64, error) {
+	var bids []model.BidHistory
+	var total int64
 
-	// 2. 调用链上合约出价
-	ctx := context.Background()
+	query := s.DB.Model(&model.BidHistory{}).Where("auction_id = ?", auctionID)
+	query.Count(&total)
 
-	// 根据你的合约逻辑，这里需要确定是ETH还是ERC20拍卖
-	// 暂时假设是ETH拍卖
-	err := s.AuctionContract.PlaceBidETH(ctx, big.NewInt(int64(auction.AuctionID)), amount)
+	offset := (page - 1) * pageSize
+	err := query.Offset(offset).Limit(pageSize).
+		Order("created_at DESC").
+		Find(&bids).Error
+
 	if err != nil {
-		return fmt.Errorf("链上出价失败: %v", err)
+		return nil, 0, err
 	}
 
-	// 3. 更新数据库
-	auction.HighestBid = amount.String()
-	auction.HighestBidder = bidder
-	auction.UpdatedAt = time.Now()
-
-	return s.DB.Save(&auction).Error
+	return bids, total, nil
 }
 
-// EndAuction 结束拍卖
-func (s *AuctionService) EndAuction(auctionID uint) error {
-	// 1. 获取拍卖信息
-	var auction model.Auction
-	if err := s.DB.First(&auction, auctionID).Error; err != nil {
-		return err
-	}
-
-	// 2. 调用链上合约结束拍卖
-	ctx := context.Background()
-	err := s.AuctionContract.EndAuction(ctx, big.NewInt(int64(auction.AuctionID)))
-	if err != nil {
-		return fmt.Errorf("链上结束拍卖失败: %v", err)
-	}
-
-	// 3. 更新数据库状态
-	auction.Ended = true
-	auction.UpdatedAt = time.Now()
-
-	return s.DB.Save(&auction).Error
-}
-
-// UpdateAuctionFromChain 从链上更新单个拍卖信息
+// UpdateAuctionFromChain 从链上更新单个拍卖信息（事件监听器调用）
 func (s *AuctionService) UpdateAuctionFromChain(auctionID uint64) error {
 	ctx := context.Background()
 
-	// 从链上获取最新信息
-	seller, duration, startPrice, startTime, ended, highestBidder, highestBid,
-		nftContract, tokenId, _, _, _, err :=
+	auction, err := s.GetAuctionFromChain(ctx, auctionID)
+	if err != nil {
+		return fmt.Errorf("获取链上拍卖信息失败: %v", err)
+	}
+
+	return s.SaveAuction(auction)
+}
+
+// ValidateAuctionExists 验证拍卖是否存在（只读检查）
+func (s *AuctionService) ValidateAuctionExists(ctx context.Context, auctionID uint64) (bool, error) {
+	_, _, _, _, _, _, _, _, _, _, _, _, err :=
 		s.AuctionContract.GetAuctionInfo(ctx, big.NewInt(int64(auctionID)))
 
 	if err != nil {
-		return err
+		// 检查是否是"拍卖不存在"的错误
+		if err.Error() == "execution reverted" ||
+			err.Error() == "auction does not exist" ||
+			err.Error() == "Not exist" {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// GetAuctionCount 获取拍卖总数
+func (s *AuctionService) GetAuctionCount(ctx context.Context) (int64, error) {
+	count, err := s.AuctionContract.GetAuctionCount(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return count.Int64(), nil
+}
+
+// GetContractInfo 获取合约信息
+func (s *AuctionService) GetContractInfo(ctx context.Context) (map[string]interface{}, error) {
+	info := make(map[string]interface{})
+
+	// 获取拍卖总数
+	count, err := s.AuctionContract.GetAuctionCount(ctx)
+	if err == nil {
+		info["auction_count"] = count.Int64()
 	}
 
-	// 更新数据库
-	var auction model.Auction
-	result := s.DB.Where("auction_id = ?", auctionID).First(&auction)
-	if result.Error != nil {
-		return result.Error
-	}
+	// 获取合约地址
+	info["contract_address"] = s.AuctionContract.GetContractAddress().Hex()
 
-	auction.NFTContract = nftContract.Hex()
-	auction.TokenID = tokenId.String()
-	auction.Seller = seller.Hex()
-	auction.StartingPrice = startPrice.String()
-	auction.HighestBid = highestBid.String()
-	auction.HighestBidder = highestBidder.Hex()
-	auction.StartTime = startTime.Uint64()
-	auction.Ended = ended
-	auction.UpdatedAt = time.Now()
+	// 获取一些活跃拍卖作为示例
+	activeAuctions, _ := s.GetActiveAuctions()
+	info["active_auctions"] = len(activeAuctions)
 
-	// 计算结束时间
-	if startTime != nil && duration != nil {
-		auction.EndTime = startTime.Uint64() + duration.Uint64()
-	}
-
-	return s.DB.Save(&auction).Error
+	return info, nil
 }

@@ -1,13 +1,12 @@
+// api/auction_handler.go
 package api
 
 import (
-	"math/big"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 
 	"nft-auction-backend/internal/model"
 	"nft-auction-backend/internal/service"
@@ -23,12 +22,15 @@ func NewAuctionHandler(auctionService *service.AuctionService) *AuctionHandler {
 	}
 }
 
-// GetAuctions 获取所有拍卖（分页）
+// ==================== 查询API（保留）====================
+
+// GetAuctions 获取所有拍卖（分页，支持过滤）
 func (h *AuctionHandler) GetAuctions(c *gin.Context) {
 	// 获取分页参数
-	// ?page=1&page_size=2
 	pageStr := c.DefaultQuery("page", "1")
 	pageSizeStr := c.DefaultQuery("page_size", "20")
+	status := c.Query("status") // 按状态过滤：active, ended, all
+	seller := c.Query("seller") // 按卖家过滤
 
 	page, err := strconv.Atoi(pageStr)
 	if err != nil || page < 1 {
@@ -40,24 +42,43 @@ func (h *AuctionHandler) GetAuctions(c *gin.Context) {
 		pageSize = 20
 	}
 
-	// 直接从数据库查询（因为服务层没有 ListAuctions 方法）
+	// 构建查询
 	var auctions []model.Auction
 	var total int64
 
-	// 获取总数
-	h.service.DB.Model(&model.Auction{}).Count(&total)
+	query := h.service.DB.Model(&model.Auction{})
 
-	// 分页查询
+	// 状态过滤
+	if status != "" && status != "all" {
+		if status == "active" {
+			query = query.Where("ended = ? AND status = ?", false, "active")
+		} else if status == "ended" {
+			query = query.Where("ended = ?", true)
+		} else {
+			query = query.Where("status = ?", status)
+		}
+	}
+
+	// 卖家过滤
+	if seller != "" {
+		query = query.Where("seller = ?", seller)
+	}
+
+	query.Count(&total)
+
 	offset := (page - 1) * pageSize
-	h.service.DB.Offset(offset).Limit(pageSize).Order("created_at DESC").Find(&auctions)
+	query.Offset(offset).Limit(pageSize).Order("created_at DESC").Find(&auctions)
 
 	c.JSON(http.StatusOK, gin.H{
-		"data": auctions,
-		"pagination": gin.H{
-			"page":       page,
-			"page_size":  pageSize,
-			"total":      total,
-			"total_page": (total + int64(pageSize) - 1) / int64(pageSize),
+		"success": true,
+		"data": gin.H{
+			"auctions": auctions,
+			"pagination": gin.H{
+				"page":       page,
+				"page_size":  pageSize,
+				"total":      total,
+				"total_page": (total + int64(pageSize) - 1) / int64(pageSize),
+			},
 		},
 	})
 }
@@ -66,164 +87,276 @@ func (h *AuctionHandler) GetAuctions(c *gin.Context) {
 func (h *AuctionHandler) GetActiveAuctions(c *gin.Context) {
 	auctions, err := h.service.GetActiveAuctions()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "获取活跃拍卖失败: " + err.Error(),
+		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"auctions": auctions,
-		"count":    len(auctions),
+		"success": true,
+		"data": gin.H{
+			"auctions": auctions,
+			"count":    len(auctions),
+		},
 	})
 }
 
 // GetAuction 获取单个拍卖
 func (h *AuctionHandler) GetAuction(c *gin.Context) {
 	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的拍卖ID"})
-		return
-	}
 
-	// 使用 GetAuctionByID（注意：参数是 uint，不是 uint64）
-	auction, err := h.service.GetAuctionByID(uint(id))
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"error": "拍卖不存在"})
+	// 尝试按链上AuctionID查询
+	if auctionID, err := strconv.ParseUint(idStr, 10, 64); err == nil {
+		auction, err := h.service.GetAuctionByAuctionID(auctionID)
+		if err != nil {
+			// 尝试按数据库ID查询
+			if dbID, err2 := strconv.ParseUint(idStr, 10, 32); err2 == nil {
+				auction, err = h.service.GetAuctionByID(uint(dbID))
+				if err != nil {
+					c.JSON(http.StatusNotFound, gin.H{
+						"success": false,
+						"error":   "拍卖不存在",
+					})
+					return
+				}
+			} else {
+				c.JSON(http.StatusNotFound, gin.H{
+					"success": false,
+					"error":   "拍卖不存在",
+				})
+				return
+			}
+		}
+
+		// 获取出价历史
+		bids, _, err := h.service.GetAuctionBids(auction.AuctionID, 1, 20)
+		if err != nil {
+			// 即使获取出价历史失败，也返回拍卖信息
+			c.JSON(http.StatusOK, gin.H{
+				"success": true,
+				"data": gin.H{
+					"auction":     auction,
+					"bid_history": []model.BidHistory{},
+				},
+			})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data": gin.H{
+				"auction":     auction,
+				"bid_history": bids,
+			},
+		})
 		return
 	}
 
-	c.JSON(http.StatusOK, auction)
-}
-
-// CreateAuctionRequest 创建拍卖请求结构体
-type CreateAuctionRequest struct {
-	TokenID       string `json:"token_id" binding:"required"`
-	StartingPrice string `json:"starting_price" binding:"required"`
-	Duration      uint64 `json:"duration" binding:"required"`
-	Seller        string `json:"seller" binding:"required"`
-	NFTContract   string `json:"nft_contract" binding:"required"`
-}
-
-// CreateAuction 创建拍卖
-func (h *AuctionHandler) CreateAuction(c *gin.Context) {
-	var req CreateAuctionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// 解析起拍价
-	startingPrice, ok := new(big.Int).SetString(req.StartingPrice, 10)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的价格格式"})
-		return
-	}
-
-	// 生成AuctionID（这里简化处理，实际应该从链上获取或使用自增）
-	// 先查询当前最大AuctionID
-	var maxAuctionID uint64
-	h.service.DB.Model(&model.Auction{}).Select("COALESCE(MAX(auction_id), 0)").Scan(&maxAuctionID)
-	auctionID := maxAuctionID + 1
-
-	auction := &model.Auction{
-		AuctionID:     auctionID,
-		NFTContract:   req.NFTContract,
-		TokenID:       req.TokenID,
-		Seller:        req.Seller,
-		StartingPrice: startingPrice.String(),
-		StartTime:     uint64(time.Now().Unix()),
-		EndTime:       uint64(time.Now().Unix()) + req.Duration,
-		Ended:         false,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
-	}
-
-	// 调用服务层创建拍卖
-	if err := h.service.CreateAuction(auction); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"message": "拍卖创建成功",
-		"auction": auction,
+	c.JSON(http.StatusBadRequest, gin.H{
+		"success": false,
+		"error":   "无效的拍卖ID",
 	})
 }
 
-// PlaceBidRequest 出价请求结构体
-type PlaceBidRequest struct {
-	Bidder string `json:"bidder" binding:"required"`
-	Amount string `json:"amount" binding:"required"`
+// CheckAuctionStatus 检查拍卖状态（只读查询）
+func (h *AuctionHandler) CheckAuctionStatus(c *gin.Context) {
+	identifier := c.Param("id")
+
+	var auction *model.Auction
+	var err error
+
+	// 判断标识符类型
+	if id, parseErr := strconv.ParseUint(identifier, 10, 64); parseErr == nil {
+		// 链上AuctionID
+		auction, err = h.service.GetAuctionByAuctionID(id)
+		if err != nil {
+			// 尝试数据库ID
+			if dbID, parseErr2 := strconv.ParseUint(identifier, 10, 32); parseErr2 == nil {
+				auction, err = h.service.GetAuctionByID(uint(dbID))
+			}
+		}
+	}
+
+	if err != nil || auction == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"error":   "未找到拍卖记录",
+			"status":  "not_found",
+		})
+		return
+	}
+
+	// 计算剩余时间
+	var timeRemaining uint64
+	if auction.EndTime > uint64(time.Now().Unix()) {
+		timeRemaining = auction.EndTime - uint64(time.Now().Unix())
+	}
+
+	// 构建响应
+	response := gin.H{
+		"success": true,
+		"data": gin.H{
+			"auction_id":     auction.AuctionID,
+			"status":         auction.Status,
+			"ended":          auction.Ended,
+			"seller":         auction.Seller,
+			"starting_price": auction.StartingPrice,
+			"highest_bid":    auction.HighestBid,
+			"highest_bidder": auction.HighestBidder,
+			"start_time":     auction.StartTime,
+			"end_time":       auction.EndTime,
+			"time_remaining": timeRemaining,
+			"nft_contract":   auction.NFTContract,
+			"token_id":       auction.TokenID,
+		},
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
-// PlaceBid 出价
-func (h *AuctionHandler) PlaceBid(c *gin.Context) {
+// GetAuctionBids 获取拍卖的出价历史
+func (h *AuctionHandler) GetAuctionBids(c *gin.Context) {
 	idStr := c.Param("id")
-	auctionID, err := strconv.ParseUint(idStr, 10, 32) // 转换为uint
+	auctionID, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的拍卖ID"})
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "无效的拍卖ID",
+		})
 		return
 	}
 
-	var req PlaceBidRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	// 分页参数
+	pageStr := c.DefaultQuery("page", "1")
+	pageSizeStr := c.DefaultQuery("page_size", "20")
+
+	page, _ := strconv.Atoi(pageStr)
+	pageSize, _ := strconv.Atoi(pageSizeStr)
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
 	}
 
-	// 解析出价金额
-	amount, ok := new(big.Int).SetString(req.Amount, 10)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的金额格式"})
-		return
-	}
-
-	// 注意：服务层的PlaceBid参数是(uint, string, *big.Int)
-	if err := h.service.PlaceBid(uint(auctionID), req.Bidder, amount); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	bids, total, err := h.service.GetAuctionBids(auctionID, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "获取出价历史失败: " + err.Error(),
+		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":    "出价成功",
-		"auction_id": auctionID,
-		"bidder":     req.Bidder,
-		"amount":     amount.String(),
+		"success": true,
+		"data": gin.H{
+			"bids": bids,
+			"pagination": gin.H{
+				"page":       page,
+				"page_size":  pageSize,
+				"total":      total,
+				"total_page": (total + int64(pageSize) - 1) / int64(pageSize),
+			},
+		},
 	})
 }
 
-// EndAuction 结束拍卖
-func (h *AuctionHandler) EndAuction(c *gin.Context) {
-	idStr := c.Param("id")
-	auctionID, err := strconv.ParseUint(idStr, 10, 32) // 转换为uint
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的拍卖ID"})
-		return
-	}
+// ==================== 合约信息API ====================
 
-	if err := h.service.EndAuction(uint(auctionID)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+// GetContractInfo 获取拍卖合约信息
+func (h *AuctionHandler) GetContractInfo(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	info, err := h.service.GetContractInfo(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "获取合约信息失败: " + err.Error(),
+		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":    "拍卖结束成功",
-		"auction_id": auctionID,
+		"success": true,
+		"data":    info,
 	})
 }
 
-// SyncAuctions 同步拍卖数据
+// GetAuctionCount 获取拍卖总数
+func (h *AuctionHandler) GetAuctionCount(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	count, err := h.service.GetAuctionCount(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "获取拍卖总数失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"auction_count": count,
+		},
+	})
+}
+
+// ==================== 验证API ====================
+
+// ValidateAuction 验证拍卖是否存在
+func (h *AuctionHandler) ValidateAuction(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	idStr := c.Param("id")
+	auctionID, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "无效的拍卖ID格式",
+		})
+		return
+	}
+
+	exists, err := h.service.ValidateAuctionExists(ctx, auctionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "验证拍卖失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"auction_id": auctionID,
+			"exists":     exists,
+		},
+	})
+}
+
+// ==================== 同步API（管理用）====================
+
+// SyncAuctions 手动同步拍卖数据（管理用）
 func (h *AuctionHandler) SyncAuctions(c *gin.Context) {
-	if err := h.service.SyncAuctions(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	ctx := c.Request.Context()
+
+	if err := h.service.SyncAllAuctions(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "同步失败: " + err.Error(),
+		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
+		"success":   true,
 		"message":   "拍卖数据同步完成",
 		"timestamp": time.Now().Unix(),
 	})
