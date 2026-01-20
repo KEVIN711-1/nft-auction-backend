@@ -1,20 +1,18 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"log"
 	"math/big"
-	"os"
 	"sync"
 	"time"
 
 	"nft-auction-backend/internal/contract"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
@@ -59,11 +57,8 @@ import (
 
 // BlockchainListener 监听区块链事件
 type BlockchainListener struct {
-	rpcURL          string
-	ethClient       *ethclient.Client
-	nftContract     contract.NFTContract
-	auctionContract contract.AuctionContract
-
+	rpcURL         string
+	ethClient      *ethclient.Client
 	nftService     *NFTService
 	auctionService *AuctionService
 
@@ -84,14 +79,12 @@ func NewBlockchainListener(
 ) *BlockchainListener {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &BlockchainListener{
-		rpcURL:          rpcURL,
-		nftContract:     nft,
-		auctionContract: auction,
-		nftService:      nftSvc,
-		auctionService:  auctionSvc,
-		ctx:             ctx,
-		cancel:          cancel,
-		stats:           map[string]int{"nft_transfers": 0, "auctions": 0, "bids": 0},
+		rpcURL:         rpcURL,
+		nftService:     nftSvc,
+		auctionService: auctionSvc,
+		ctx:            ctx,
+		cancel:         cancel,
+		stats:          map[string]int{"nft_transfers": 0, "auctions": 0, "bids": 0},
 	}
 }
 
@@ -181,7 +174,7 @@ func (l *BlockchainListener) syncAllAuctions() {
 }
 
 func (l *BlockchainListener) syncAllNFTs() {
-	log.Println("⏳ 同步链上所有拍卖数据中...")
+	log.Println("⏳ 同步链上所有NFT数据中...")
 	if err := l.nftService.SyncAllNFTs(l.ctx); err != nil {
 		log.Printf("❌ 同步拍卖失败: %v", err)
 		return
@@ -191,53 +184,86 @@ func (l *BlockchainListener) syncAllNFTs() {
 
 // ---------------- NFT Transfer 监听 ----------------
 func (l *BlockchainListener) listenNFTTransfer() {
-	nftAddr := l.nftContract.GetContractAddress()
+	nftAddr := l.nftService.GetContractAddress()
+	log.Printf("🎯 监听合约: %s", nftAddr.Hex())
 	query := ethereum.FilterQuery{Addresses: []common.Address{nftAddr}}
-
-	data, err := os.ReadFile("./internal/contract/abi/abi/KevinNFT.abi")
-	if err != nil {
-		log.Fatalf("❌ 读取 NFT ABI 文件失败: %v", err)
-	}
-	parsedABI, err := abi.JSON(bytes.NewReader(data))
-	if err != nil {
-		log.Fatalf("❌ 解析 NFT ABI 失败: %v", err)
-	}
-
-	transferEvent := parsedABI.Events["Transfer"]
-
-	log.Println("🔔 NFT Transfer 监听器已启动")
 	logsChan := make(chan types.Log)
+
+	// 计算预期的签名
+	transferSig := crypto.Keccak256Hash([]byte("Transfer(address,address,uint256)")).Hex()
+	mintSig := crypto.Keccak256Hash([]byte("NFTMinted(address,uint256,string)")).Hex()
+
+	log.Printf("  Transfer签名: %s", transferSig)
+	log.Printf("  Minted签名: %s", mintSig)
+	// 从最新区块开始监听
+	latestBlock, err := l.ethClient.BlockNumber(l.ctx)
+	if err == nil {
+		log.Printf("📦 从区块 #%d 开始监听", latestBlock)
+	}
+
+	// SubscribeFilterLogs默认从最新区块开始监听
 	sub, err := l.ethClient.SubscribeFilterLogs(l.ctx, query, logsChan)
 	if err != nil {
-		log.Fatalf("❌ NFT SubscribeFilterLogs 失败: %v", err)
+		log.Fatalf("❌ 订阅失败: %v", err)
 	}
+	log.Println("✅1 NFT 事件监听器订阅成功，等待事件...")
 
 	for {
 		select {
 		case err := <-sub.Err():
-			log.Printf("❌ NFT监听错误: %v, 重连中...", err)
+			log.Printf("❌ 订阅错误: %v", err)
 			return
+
 		case vLog := <-logsChan:
 			if len(vLog.Topics) == 0 {
 				continue
 			}
-			if vLog.Topics[0] == transferEvent.ID {
-				tokenID := new(big.Int).SetBytes(vLog.Data)
-				log.Printf("🔄 NFT Transfer 事件: TokenID=%s", tokenID.String())
+			// 打印事件基本信息
+			log.Printf("📥 NFT  监听器收到事件日志:")
+			log.Printf("  区块: %d", vLog.BlockNumber)
+			log.Printf("  交易: %s", vLog.TxHash.Hex())
+			log.Printf("  主题数: %d", len(vLog.Topics))
+			// 监听到的事件签名
+			eventSig := vLog.Topics[0].Hex()
+			log.Printf("  事件签名: %s", eventSig)
 
-				l.statsLock.Lock()
-				l.stats["nft_transfers"]++
-				l.statsLock.Unlock()
-
-				err := l.nftService.UpdateNFTFromChain(tokenID.String())
-				if err != nil {
-					log.Printf("❌ NFT同步失败: %v", err)
+			if eventSig == mintSig {
+				mintEvent, err := l.nftService.client.ParseNFTMinted(vLog)
+				if err == nil {
+					log.Printf("✅ 解析到Mint事件: TokenID=%s", mintEvent.TokenId)
+					// 理想状态下为获取事件传递的参数后，只更新参数，不用大费周章再根据id 去拉取一边区块链的信息了
+					err := l.nftService.UpdateNFTFromChain(mintEvent.TokenId.String())
+					if err != nil {
+						log.Printf("❌ NFT同步失败: %v", err)
+						continue
+					}
+					log.Printf("✅ NFT已同步: TokenID=%s", mintEvent.TokenId.String())
 					continue
+				} else {
+					log.Printf("❌ 解析Mint事件失败: %v", err)
 				}
-				log.Printf("✅ NFT已同步: TokenID=%s", tokenID.String())
+			} else if eventSig == transferSig {
+				// 尝试解析Transfer事件
+				transferEvent, err := l.nftService.client.ParseTransfer(vLog)
+				if err == nil {
+					log.Printf("✅ 解析到Transfer事件: TokenID=%s", transferEvent.TokenId)
+					// 理想状态下为获取事件传递的参数后，只更新参数，不用大费周章再根据id 去拉取一边区块链的信息了
+					err := l.nftService.UpdateNFTFromChain(transferEvent.TokenId.String())
+					if err != nil {
+						log.Printf("❌ NFT同步失败: %v", err)
+						continue
+					}
+					log.Printf("✅ NFT已同步: TokenID=%s", transferEvent.TokenId.String())
+					continue
+				} else {
+					log.Printf("❌ 解析Transfer事件失败: %v", err)
+				}
+			} else {
+				// 加一些approve 的监听
+				log.Printf("⚠️ 无法解析的事件，跳过")
 			}
 		case <-l.ctx.Done():
-			log.Println("❌ NFT监听器已停止")
+			log.Println("🛑 监听器停止")
 			return
 		}
 	}
@@ -245,23 +271,22 @@ func (l *BlockchainListener) listenNFTTransfer() {
 
 // ---------------- 拍卖事件监听 ----------------
 func (l *BlockchainListener) listenAuctionEvents() {
-	auctionAddr := l.auctionContract.GetContractAddress()
+	auctionAddr := l.auctionService.GetContractAddress()
 	query := ethereum.FilterQuery{Addresses: []common.Address{auctionAddr}}
 
-	data, err := os.ReadFile("./internal/contract/abi/abi/NftAuction.abi")
-	if err != nil {
-		log.Fatalf("❌ 读取拍卖 ABI 文件失败: %v", err)
-	}
-	parsedABI, err := abi.JSON(bytes.NewReader(data))
-	if err != nil {
-		log.Fatalf("❌ 解析拍卖 ABI 失败: %v", err)
-	}
+	// 根据你的合约声明，正确的签名计算：
+	// 注意：参数顺序和类型必须完全匹配
+	auctionCreatedID := crypto.Keccak256Hash([]byte("AuctionCreated(uint256,address,uint256,uint256)"))
+	bidPlacedID := crypto.Keccak256Hash([]byte("NewBid(uint256,address,uint256)"))
+	auctionEndedID := crypto.Keccak256Hash([]byte("AuctionEnded(uint256,address,uint256)"))
 
-	auctionCreatedID := parsedABI.Events["AuctionCreated"].ID
-	bidPlacedID := parsedABI.Events["NewBid"].ID
-	auctionEndedID := parsedABI.Events["AuctionEnded"].ID
+	// 调试输出
+	log.Printf("📊 计算的事件签名:")
+	log.Printf("  AuctionCreated: %s", auctionCreatedID.Hex())
+	log.Printf("  NewBid: %s", bidPlacedID.Hex())
+	log.Printf("  AuctionEnded: %s", auctionEndedID.Hex())
 
-	log.Println("🔔 拍卖事件监听器已启动")
+	log.Println("✅2 NFT 拍卖事件监听器订阅成功，等待事件...")
 	logsChan := make(chan types.Log)
 	sub, err := l.ethClient.SubscribeFilterLogs(l.ctx, query, logsChan)
 	if err != nil {
@@ -277,33 +302,46 @@ func (l *BlockchainListener) listenAuctionEvents() {
 			if len(vLog.Topics) == 0 {
 				continue
 			}
+
 			eventID := vLog.Topics[0]
+			log.Printf("📥 NFT 拍卖事件收到事件，签名: %s", eventID.Hex())
+
+			// 重要：你的事件参数都不是indexed，所以auctionId在Data字段，不在Topics中
 			var auctionID *big.Int
 
 			switch eventID {
 			case auctionCreatedID, bidPlacedID, auctionEndedID:
-				auctionID = new(big.Int).SetBytes(vLog.Data)
+				// 因为参数没有indexed，auctionId在Data字段的前32字节
+				if len(vLog.Data) >= 32 {
+					auctionID = new(big.Int).SetBytes(vLog.Data[:32])
+				}
+
 				var name string
 				switch eventID {
 				case auctionCreatedID:
 					name = "AuctionCreated"
 				case bidPlacedID:
-					name = "BidPlaced"
+					name = "NewBid"
 				case auctionEndedID:
 					name = "AuctionEnded"
 				}
-				log.Printf("🏷️ 拍卖事件: %s, AuctionID=%s", name, auctionID.String())
 
-				l.statsLock.Lock()
-				l.stats["auctions"]++
-				if eventID == bidPlacedID {
-					l.stats["bids"]++
-				}
-				l.statsLock.Unlock()
+				if auctionID != nil {
+					log.Printf("🏷️ 拍卖事件: %s, AuctionID=%s", name, auctionID.String())
 
-				if err := l.auctionService.UpdateAuctionFromChain(auctionID.Uint64()); err != nil {
-					log.Printf("❌ 更新拍卖失败: %v", err)
+					l.statsLock.Lock()
+					l.stats["auctions"]++
+					if eventID == bidPlacedID {
+						l.stats["bids"]++
+					}
+					l.statsLock.Unlock()
+					// 理想状态下为获取事件传递的参数后，只更新参数，不用大费周章再根据id 去拉取一边区块链的信息了
+					if err := l.auctionService.UpdateAuctionFromChain(auctionID.Uint64()); err != nil {
+						log.Printf("❌ 更新拍卖失败: %v", err)
+					}
 				}
+			default:
+				log.Printf("⚠️ 未知拍卖事件: %s", eventID.Hex())
 			}
 		case <-l.ctx.Done():
 			log.Println("❌ 拍卖监听器已停止")

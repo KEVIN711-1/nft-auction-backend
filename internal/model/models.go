@@ -39,6 +39,7 @@ type NFTInfo struct {
 	TokenID         string    `gorm:"size:100;comment:Token ID"` // 新增TokenID字段
 	Name            string    `gorm:"size:255;comment:NFT名称"`
 	Symbol          string    `gorm:"size:50;comment:NFT符号"`
+	Uri             string    `gorm:"size:50;comment:URI"`
 	TotalSupply     string    `gorm:"type:varchar(100);comment:总供应量"`
 	Owner           string    `gorm:"size:42;comment:合约所有者"`
 	Blockchain      string    `gorm:"size:20;default:'sepolia';comment:区块链网络"`

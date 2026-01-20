@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
@@ -119,23 +120,7 @@ func (c *NFTClient) CheckOwner(ctx context.Context, tokenID *big.Int, address st
 
 // GetTotalSupply 获取总供应量（需要合约支持）
 func (c *NFTClient) GetTotalSupply(ctx context.Context) (*big.Int, error) {
-	maxTokenID := big.NewInt(10) // 设置一个合理的上限
-
-	foundCount := big.NewInt(0)
-
-	for i := int64(1); i < maxTokenID.Int64(); i++ {
-		tokenID := big.NewInt(i)
-
-		// 检查NFT是否存在
-		exists, _ := c.CheckIfMinted(ctx, tokenID)
-		if exists {
-			foundCount.Add(foundCount, big.NewInt(1))
-		} else {
-			break
-		}
-	}
-
-	return foundCount, nil
+	return c.contract.TotalSupply(&bind.CallOpts{Context: ctx})
 }
 
 // GetBalanceOf 获取地址拥有的 NFT 数量
@@ -154,4 +139,12 @@ func (c *NFTClient) CheckIfMinted(ctx context.Context, tokenID *big.Int) (bool, 
 		return false, err
 	}
 	return true, nil
+}
+
+func (c *NFTClient) ParseTransfer(log1 types.Log) (*KevinNFTTransfer, error) {
+	return c.contract.ParseTransfer(log1)
+}
+
+func (c *NFTClient) ParseNFTMinted(log1 types.Log) (*KevinNFTNFTMinted, error) {
+	return c.contract.ParseNFTMinted(log1)
 }

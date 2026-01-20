@@ -5,6 +5,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 // /internal
@@ -32,6 +33,9 @@ type NFTContract interface {
 
 	// 验证
 	CheckOwner(ctx context.Context, tokenID *big.Int, address string) (bool, error)
+
+	ParseTransfer(log types.Log) (*KevinNFTTransfer, error)
+	ParseNFTMinted(log types.Log) (*KevinNFTNFTMinted, error)
 }
 
 // ==================== 拍卖合约接口（新增）====================

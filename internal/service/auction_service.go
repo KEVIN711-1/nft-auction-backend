@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"gorm.io/gorm"
 
 	"nft-auction-backend/internal/contract"
@@ -29,6 +30,9 @@ func NewAuctionService(db *gorm.DB, auctionContract contract.AuctionContract) *A
 }
 
 // ==================== 数据库操作 ====================
+func (s *AuctionService) GetContractAddress() common.Address {
+	return s.AuctionContract.GetContractAddress()
+}
 
 // SaveAuction 保存或更新拍卖到数据库
 func (s *AuctionService) SaveAuction(auction *model.Auction) error {

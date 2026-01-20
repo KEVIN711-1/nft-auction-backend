@@ -10,6 +10,7 @@ import (
 	"nft-auction-backend/internal/contract"
 	"nft-auction-backend/internal/model"
 
+	"github.com/ethereum/go-ethereum/common"
 	"gorm.io/gorm"
 )
 
@@ -26,8 +27,8 @@ func NewNFTService(db *gorm.DB, client contract.NFTContract) *NFTService {
 }
 
 // nft_service.go - 添加这个方法
-func (s *NFTService) GetContractAddress() string {
-	return s.client.GetContractAddress().Hex()
+func (s *NFTService) GetContractAddress() common.Address {
+	return s.client.GetContractAddress()
 }
 
 // SaveNFT 保存或更新 NFT 到数据库
@@ -170,6 +171,7 @@ func (s *NFTService) UpdateNFTFromChain(tokenID string) error {
 	contractAddr := s.client.GetContractAddress().Hex()
 	contractName, _ := s.client.GetName(ctx)
 	contractSymbol, _ := s.client.GetSymbol(ctx)
+	contractUrl, _ := s.client.GetTokenURI(ctx, tokenIDBig)
 
 	// 获取总供应量
 	var totalSupply string
@@ -183,6 +185,7 @@ func (s *NFTService) UpdateNFTFromChain(tokenID string) error {
 		TokenID:         tokenID,
 		Owner:           ownerAddr.Hex(),
 		Name:            fmt.Sprintf("NFT #%s", tokenID),
+		Uri:             fmt.Sprintf("URI #%s", contractUrl),
 		TotalSupply:     totalSupply,
 		Blockchain:      "sepolia",
 		ContractName:    contractName,

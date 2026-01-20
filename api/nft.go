@@ -30,7 +30,7 @@ func (h *NFTHandler) GetNFTInfo(c *gin.Context) {
 	}
 
 	// 调用服务层获取NFT信息
-	contractAddr := h.service.GetContractAddress()
+	contractAddr := h.service.GetContractAddress().Hex()
 
 	info, err := h.service.GetNFT(contractAddr, tokenID)
 	if err != nil {
