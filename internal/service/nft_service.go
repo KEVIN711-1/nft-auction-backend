@@ -31,25 +31,37 @@ func (s *NFTService) GetContractAddress() common.Address {
 	return s.client.GetContractAddress()
 }
 
+// GetNFT 从数据库获取 NFT
+func (s *NFTService) GetNFT(contractAddr, tokenID string) (*model.NFTInfo, error) {
+	var nft model.NFTInfo
+	result := s.DB.Where("contract_address = ? AND token_id = ?", contractAddr, tokenID).First(&nft)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &nft, nil
+}
+
 // SaveNFT 保存或更新 NFT 到数据库
-func (s *NFTService) SaveNFT(nft *model.NFTInfo) *model.NFTInfo {
+func (s *NFTService) SaveNFT(ctx context.Context, nft *model.NFTInfo) error {
 	if nft == nil {
 		return nil
 	}
 
 	var existing model.NFTInfo
-	result := s.DB.Where("contract_address = ? AND token_id = ?", nft.ContractAddress, nft.TokenID).First(&existing)
+	result := s.DB.WithContext(ctx).
+		Where("contract_address = ? AND token_id = ?", nft.ContractAddress, nft.TokenID).
+		First(&existing)
 	now := time.Now()
 
 	if result.Error != nil {
 		nft.CreatedAt = now
 		nft.UpdatedAt = now
-		if err := s.DB.Create(nft).Error; err != nil {
-			log.Printf("❌ 保存 NFT %s/%s 失败: %v", nft.ContractAddress, nft.TokenID, err)
-			return nil
+		if err := s.DB.WithContext(ctx).Create(nft).Error; err != nil {
+			log.Printf("❌ 保存 NFT token id = %s 失败: %v", nft.TokenID, err)
+			return err
 		}
-		log.Printf("✅ 新增 NFT %s/%s", nft.ContractAddress, nft.TokenID)
-		return nft
+		log.Printf("新增 NFT %s", nft.TokenID)
+		return nil
 	}
 
 	// 更新现有记录
@@ -62,22 +74,12 @@ func (s *NFTService) SaveNFT(nft *model.NFTInfo) *model.NFTInfo {
 	existing.IsMinted = nft.IsMinted
 	existing.UpdatedAt = now
 
-	if err := s.DB.Save(&existing).Error; err != nil {
-		log.Printf("❌ 更新 NFT %s/%s 失败: %v", existing.ContractAddress, existing.TokenID, err)
-		return nil
+	if err := s.DB.WithContext(ctx).Save(&existing).Error; err != nil {
+		log.Printf("❌ 更新 NFT %s 失败: %v", existing.TokenID, err)
+		return err
 	}
-	log.Printf("🔄 更新 NFT %s/%s", existing.ContractAddress, existing.TokenID)
-	return &existing
-}
-
-// GetNFT 从数据库获取 NFT
-func (s *NFTService) GetNFT(contractAddr, tokenID string) (*model.NFTInfo, error) {
-	var nft model.NFTInfo
-	result := s.DB.Where("contract_address = ? AND token_id = ?", contractAddr, tokenID).First(&nft)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return &nft, nil
+	log.Printf(" 更新 NFT token id = %s", existing.TokenID)
+	return nil
 }
 
 // GetOwner 从区块链获取NFT拥有者
@@ -96,6 +98,7 @@ func (s *NFTService) GetOwner(ctx context.Context, tokenID string) (string, erro
 }
 
 // ValidateOwnership 验证指定地址是否是NFT所有者
+// 优化为从数据库判断
 func (s *NFTService) ValidateOwnership(ctx context.Context, tokenID, address string) (bool, error) {
 	owner, err := s.GetOwner(ctx, tokenID)
 	if err != nil {
@@ -116,10 +119,16 @@ func (s *NFTService) SyncAllNFTs(ctx context.Context) error {
 	contractName, _ := s.client.GetName(ctx)
 	contractSymbol, _ := s.client.GetSymbol(ctx)
 
-	log.Printf("开始同步NFT数据，总供应量: %d", total.Int64())
-
 	successCount := 0
 	for i := int64(1); i <= total.Int64(); i++ {
+		// 检查ctx是否已取消
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("同步被取消: %v", ctx.Err())
+		default:
+			// 继续执行
+		}
+
 		tokenID := fmt.Sprintf("%d", i)
 		tokenIDBig := big.NewInt(i)
 
@@ -142,18 +151,19 @@ func (s *NFTService) SyncAllNFTs(ctx context.Context) error {
 			LastSyncTime:    time.Now(),
 		}
 
-		if s.SaveNFT(nft) != nil {
+		// 注意：这里需要传递ctx给SaveNFT
+		if s.SaveNFT(ctx, nft) == nil {
 			successCount++
 		}
 	}
 
-	log.Printf("✅ NFT全量同步完成，总数: %d", total.Int64())
+	log.Printf(" NFT全量同步完成，总数: %d", total.Int64())
 	return nil
 }
 
 // UpdateNFTFromChain 从链上更新单个NFT信息（事件监听器调用）
-func (s *NFTService) UpdateNFTFromChain(tokenID string) error {
-	ctx := context.Background()
+func (s *NFTService) UpdateNFTFromChain(ctx context.Context, tokenID string) error {
+	// 注意：不再创建新的context，使用传入的ctx
 
 	// 将 tokenID 转换为 big.Int
 	tokenIDBig, ok := new(big.Int).SetString(tokenID, 10)
@@ -185,7 +195,7 @@ func (s *NFTService) UpdateNFTFromChain(tokenID string) error {
 		TokenID:         tokenID,
 		Owner:           ownerAddr.Hex(),
 		Name:            fmt.Sprintf("NFT #%s", tokenID),
-		Uri:             fmt.Sprintf("URI #%s", contractUrl),
+		Uri:             contractUrl, // 修正：直接使用获取到的URI
 		TotalSupply:     totalSupply,
 		Blockchain:      "sepolia",
 		ContractName:    contractName,
@@ -194,12 +204,12 @@ func (s *NFTService) UpdateNFTFromChain(tokenID string) error {
 		LastSyncTime:    time.Now(),
 	}
 
-	// 保存到数据库
-	savedNFT := s.SaveNFT(nft)
-	if savedNFT == nil {
+	// 保存到数据库，传递ctx
+	err = s.SaveNFT(ctx, nft)
+	if err != nil {
 		return fmt.Errorf("保存NFT到数据库失败: %s/%s", contractAddr, tokenID)
 	}
 
-	log.Printf("✅ NFT已更新: TokenID=%s, Owner=%s", tokenID, ownerAddr.Hex())
+	log.Printf(" NFT已更新: %s/%s, Owner=%s", contractAddr, tokenID, ownerAddr.Hex())
 	return nil
 }

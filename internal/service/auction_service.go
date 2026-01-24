@@ -35,13 +35,13 @@ func (s *AuctionService) GetContractAddress() common.Address {
 }
 
 // SaveAuction 保存或更新拍卖到数据库
-func (s *AuctionService) SaveAuction(auction *model.Auction) error {
+func (s *AuctionService) SaveAuction(ctx context.Context, auction *model.Auction) error {
 	if auction == nil {
 		return fmt.Errorf("拍卖信息为空")
 	}
 
 	var existing model.Auction
-	result := s.DB.Where("auction_id = ?", auction.AuctionID).First(&existing)
+	result := s.DB.WithContext(ctx).Where("auction_id = ?", auction.AuctionID).First(&existing)
 	now := time.Now()
 
 	if result.Error != nil {
@@ -49,7 +49,7 @@ func (s *AuctionService) SaveAuction(auction *model.Auction) error {
 		auction.CreatedAt = now
 		auction.UpdatedAt = now
 
-		if err := s.DB.Create(auction).Error; err != nil {
+		if err := s.DB.WithContext(ctx).Create(auction).Error; err != nil {
 			return fmt.Errorf("创建拍卖失败: %v", err)
 		}
 		log.Printf("✅ 新增拍卖 #%d", auction.AuctionID)
@@ -67,7 +67,7 @@ func (s *AuctionService) SaveAuction(auction *model.Auction) error {
 		existing.Status = auction.Status
 		existing.UpdatedAt = now
 
-		if err := s.DB.Save(&existing).Error; err != nil {
+		if err := s.DB.WithContext(ctx).Save(&existing).Error; err != nil {
 			return fmt.Errorf("更新拍卖失败: %v", err)
 		}
 		log.Printf("🔄 更新拍卖 #%d", auction.AuctionID)
@@ -77,14 +77,14 @@ func (s *AuctionService) SaveAuction(auction *model.Auction) error {
 }
 
 // SaveBidHistory 保存出价历史记录
-func (s *AuctionService) SaveBidHistory(bid *model.BidHistory) error {
+func (s *AuctionService) SaveBidHistory(ctx context.Context, bid *model.BidHistory) error {
 	if bid == nil {
 		return fmt.Errorf("出价记录为空")
 	}
 
 	// 检查是否已存在（根据交易哈希）
 	var existing model.BidHistory
-	if err := s.DB.Where("tx_hash = ?", bid.TxHash).First(&existing).Error; err == nil {
+	if err := s.DB.WithContext(ctx).Where("tx_hash = ?", bid.TxHash).First(&existing).Error; err == nil {
 		// 已存在，更新
 		existing.Amount = bid.Amount
 		existing.Status = bid.Status
@@ -92,7 +92,7 @@ func (s *AuctionService) SaveBidHistory(bid *model.BidHistory) error {
 		existing.BlockTime = bid.BlockTime
 		existing.UpdatedAt = time.Now()
 
-		if err := s.DB.Save(&existing).Error; err != nil {
+		if err := s.DB.WithContext(ctx).Save(&existing).Error; err != nil {
 			return fmt.Errorf("更新出价记录失败: %v", err)
 		}
 		return nil
@@ -103,7 +103,7 @@ func (s *AuctionService) SaveBidHistory(bid *model.BidHistory) error {
 	bid.CreatedAt = now
 	bid.UpdatedAt = now
 
-	if err := s.DB.Create(bid).Error; err != nil {
+	if err := s.DB.WithContext(ctx).Create(bid).Error; err != nil {
 		return fmt.Errorf("创建出价记录失败: %v", err)
 	}
 
@@ -111,9 +111,7 @@ func (s *AuctionService) SaveBidHistory(bid *model.BidHistory) error {
 	return nil
 }
 
-// ==================== 链上查询方法 ====================
-
-// GetAuctionFromChain 从区块链获取拍卖信息（适配你的接口）
+// GetAuctionFromChain 从区块链获取拍卖信息
 func (s *AuctionService) GetAuctionFromChain(ctx context.Context, auctionID uint64) (*model.Auction, error) {
 	// 使用 GetAuctionInfo 方法获取拍卖信息
 	seller, duration, startPrice, startTime, ended, highestBidder, highestBid,
@@ -180,7 +178,7 @@ func (s *AuctionService) SyncAllAuctions(ctx context.Context) error {
 		}
 
 		// 保存到数据库
-		if err := s.SaveAuction(auction); err == nil {
+		if err := s.SaveAuction(ctx, auction); err == nil { // 添加ctx参数
 			successCount++
 			log.Printf("✅ 同步拍卖 #%d: NFT=%s/%s, 最高出价=%s",
 				auctionID, auction.NFTContract, auction.TokenID, auction.HighestBid)
@@ -189,16 +187,16 @@ func (s *AuctionService) SyncAllAuctions(ctx context.Context) error {
 		}
 	}
 
-	log.Printf("✅ 拍卖同步完成，成功同步: %d/%d", successCount, count.Int64())
+	log.Printf("拍卖同步完成，成功同步: %d/%d", successCount, count.Int64())
 	return nil
 }
 
 // ==================== 查询方法 ====================
 
 // GetAuctionByID 根据数据库ID获取拍卖
-func (s *AuctionService) GetAuctionByID(id uint) (*model.Auction, error) {
+func (s *AuctionService) GetAuctionByID(ctx context.Context, id uint) (*model.Auction, error) {
 	var auction model.Auction
-	result := s.DB.First(&auction, id)
+	result := s.DB.WithContext(ctx).First(&auction, id)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -206,9 +204,9 @@ func (s *AuctionService) GetAuctionByID(id uint) (*model.Auction, error) {
 }
 
 // GetAuctionByAuctionID 根据链上AuctionID获取拍卖
-func (s *AuctionService) GetAuctionByAuctionID(auctionID uint64) (*model.Auction, error) {
+func (s *AuctionService) GetAuctionByAuctionID(ctx context.Context, auctionID uint64) (*model.Auction, error) {
 	var auction model.Auction
-	result := s.DB.Where("auction_id = ?", auctionID).First(&auction)
+	result := s.DB.WithContext(ctx).Where("auction_id = ?", auctionID).First(&auction)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -216,9 +214,9 @@ func (s *AuctionService) GetAuctionByAuctionID(auctionID uint64) (*model.Auction
 }
 
 // GetAuctionByTxHash 根据交易哈希获取拍卖（用于前端提交后查询）
-func (s *AuctionService) GetAuctionByTxHash(txHash string) (*model.Auction, error) {
+func (s *AuctionService) GetAuctionByTxHash(ctx context.Context, txHash string) (*model.Auction, error) {
 	var auction model.Auction
-	result := s.DB.Where("tx_hash = ?", txHash).First(&auction)
+	result := s.DB.WithContext(ctx).Where("tx_hash = ?", txHash).First(&auction)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -226,12 +224,12 @@ func (s *AuctionService) GetAuctionByTxHash(txHash string) (*model.Auction, erro
 }
 
 // GetActiveAuctions 获取所有活跃拍卖
-func (s *AuctionService) GetActiveAuctions() ([]model.Auction, error) {
+func (s *AuctionService) GetActiveAuctions(ctx context.Context) ([]model.Auction, error) {
 	var auctions []model.Auction
 	currentTime := uint64(time.Now().Unix())
-	log.Printf("✅ ----currentTime=%d ", currentTime)
+	// log.Printf("✅ ----currentTime=%d ", currentTime)
 
-	result := s.DB.Where("ended = ? AND end_time > ?", false, currentTime).
+	result := s.DB.WithContext(ctx).Where("ended = ? AND end_time > ?", false, currentTime).
 		Order("created_at DESC").
 		Find(&auctions)
 
@@ -242,11 +240,11 @@ func (s *AuctionService) GetActiveAuctions() ([]model.Auction, error) {
 }
 
 // GetAuctionBids 获取拍卖的出价历史
-func (s *AuctionService) GetAuctionBids(auctionID uint64, page, pageSize int) ([]model.BidHistory, int64, error) {
+func (s *AuctionService) GetAuctionBids(ctx context.Context, auctionID uint64, page, pageSize int) ([]model.BidHistory, int64, error) {
 	var bids []model.BidHistory
 	var total int64
 
-	query := s.DB.Model(&model.BidHistory{}).Where("auction_id = ?", auctionID)
+	query := s.DB.WithContext(ctx).Model(&model.BidHistory{}).Where("auction_id = ?", auctionID)
 	query.Count(&total)
 
 	offset := (page - 1) * pageSize
@@ -262,15 +260,13 @@ func (s *AuctionService) GetAuctionBids(auctionID uint64, page, pageSize int) ([
 }
 
 // UpdateAuctionFromChain 从链上更新单个拍卖信息（事件监听器调用）
-func (s *AuctionService) UpdateAuctionFromChain(auctionID uint64) error {
-	ctx := context.Background()
-
+func (s *AuctionService) UpdateAuctionFromChain(ctx context.Context, auctionID uint64) error {
 	auction, err := s.GetAuctionFromChain(ctx, auctionID)
 	if err != nil {
 		return fmt.Errorf("获取链上拍卖信息失败: %v", err)
 	}
 
-	return s.SaveAuction(auction)
+	return s.SaveAuction(ctx, auction)
 }
 
 // ValidateAuctionExists 验证拍卖是否存在（只读检查）
@@ -313,7 +309,7 @@ func (s *AuctionService) GetContractInfo(ctx context.Context) (map[string]interf
 	info["contract_address"] = s.AuctionContract.GetContractAddress().Hex()
 
 	// 获取一些活跃拍卖作为示例
-	activeAuctions, _ := s.GetActiveAuctions()
+	activeAuctions, _ := s.GetActiveAuctions(ctx)
 	info["active_auctions"] = len(activeAuctions)
 
 	return info, nil

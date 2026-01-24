@@ -33,22 +33,27 @@ type Auction struct {
 
 // NFTInfo NFT合约信息表
 type NFTInfo struct {
-	ID uint64 `gorm:"primaryKey;autoIncrement"`
-	// ContractAddress string    `gorm:"uniqueIndex;size:42;comment:NFT合约地址"`
-	ContractAddress string    `gorm:"size:42;not null;index:idx_contract_token;comment:NFT合约地址" json:"contract_address"`
-	TokenID         string    `gorm:"size:100;comment:Token ID"` // 新增TokenID字段
-	Name            string    `gorm:"size:255;comment:NFT名称"`
-	Symbol          string    `gorm:"size:50;comment:NFT符号"`
-	Uri             string    `gorm:"size:50;comment:URI"`
-	TotalSupply     string    `gorm:"type:varchar(100);comment:总供应量"`
-	Owner           string    `gorm:"size:42;comment:合约所有者"`
-	Blockchain      string    `gorm:"size:20;default:'sepolia';comment:区块链网络"`
-	LastSyncTime    time.Time `gorm:"comment:最后同步时间"`
-	ContractName    string    `gorm:"size:255;comment:合约名称"`       // 新增
-	ContractSymbol  string    `gorm:"size:50;comment:合约符号"`        // 新增
-	IsMinted        bool      `gorm:"default:false;comment:是否已铸造"` // 新增
-	CreatedAt       time.Time `gorm:"autoCreateTime"`
-	UpdatedAt       time.Time `gorm:"autoUpdateTime"`
+	ID              uint64 `gorm:"primaryKey;autoIncrement"`
+	ContractAddress string `gorm:"size:42;not null;index:idx_contract_token;comment:NFT合约地址" json:"contract_address"`
+	TokenID         string `gorm:"size:100;comment:Token ID"` // 新增TokenID字段
+	Name            string `gorm:"size:255;comment:NFT名称"`
+	Symbol          string `gorm:"size:50;comment:NFT符号"`
+	Uri             string `gorm:"size:50;comment:URI"`
+	TotalSupply     string `gorm:"type:varchar(100);comment:总供应量"`
+	Owner           string `gorm:"size:42;comment:合约所有者"`
+	// 授权事件
+	// Approved string `gorm:"size:42;comment:合约授权地址"`
+	ApprovedAddress string    `gorm:"size:42;comment:被授权地址"`
+	ApprovedAt      time.Time `gorm:"comment:授权时间"`
+	ApprovalTxHash  string    `gorm:"size:66;comment:授权交易哈希"`
+
+	Blockchain     string    `gorm:"size:20;default:'sepolia';comment:区块链网络"`
+	LastSyncTime   time.Time `gorm:"comment:最后同步时间"`
+	ContractName   string    `gorm:"size:255;comment:合约名称"`       // 新增
+	ContractSymbol string    `gorm:"size:50;comment:合约符号"`        // 新增
+	IsMinted       bool      `gorm:"default:false;comment:是否已铸造"` // 新增
+	CreatedAt      time.Time `gorm:"autoCreateTime"`
+	UpdatedAt      time.Time `gorm:"autoUpdateTime"`
 }
 
 // User 用户模型

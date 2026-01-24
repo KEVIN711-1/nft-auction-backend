@@ -85,7 +85,9 @@ func (h *AuctionHandler) GetAuctions(c *gin.Context) {
 
 // GetActiveAuctions 获取进行中的拍卖
 func (h *AuctionHandler) GetActiveAuctions(c *gin.Context) {
-	auctions, err := h.service.GetActiveAuctions()
+	ctx := c.Request.Context()
+
+	auctions, err := h.service.GetActiveAuctions(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -106,14 +108,15 @@ func (h *AuctionHandler) GetActiveAuctions(c *gin.Context) {
 // GetAuction 获取单个拍卖
 func (h *AuctionHandler) GetAuction(c *gin.Context) {
 	idStr := c.Param("id")
+	ctx := c.Request.Context()
 
 	// 尝试按链上AuctionID查询
 	if auctionID, err := strconv.ParseUint(idStr, 10, 64); err == nil {
-		auction, err := h.service.GetAuctionByAuctionID(auctionID)
+		auction, err := h.service.GetAuctionByAuctionID(ctx, auctionID)
 		if err != nil {
 			// 尝试按数据库ID查询
 			if dbID, err2 := strconv.ParseUint(idStr, 10, 32); err2 == nil {
-				auction, err = h.service.GetAuctionByID(uint(dbID))
+				auction, err = h.service.GetAuctionByID(ctx, uint(dbID))
 				if err != nil {
 					c.JSON(http.StatusNotFound, gin.H{
 						"success": false,
@@ -131,7 +134,7 @@ func (h *AuctionHandler) GetAuction(c *gin.Context) {
 		}
 
 		// 获取出价历史
-		bids, _, err := h.service.GetAuctionBids(auction.AuctionID, 1, 20)
+		bids, _, err := h.service.GetAuctionBids(ctx, auction.AuctionID, 1, 20)
 		if err != nil {
 			// 即使获取出价历史失败，也返回拍卖信息
 			c.JSON(http.StatusOK, gin.H{
@@ -163,6 +166,7 @@ func (h *AuctionHandler) GetAuction(c *gin.Context) {
 // CheckAuctionStatus 检查拍卖状态（只读查询）
 func (h *AuctionHandler) CheckAuctionStatus(c *gin.Context) {
 	identifier := c.Param("id")
+	ctx := c.Request.Context()
 
 	var auction *model.Auction
 	var err error
@@ -170,11 +174,11 @@ func (h *AuctionHandler) CheckAuctionStatus(c *gin.Context) {
 	// 判断标识符类型
 	if id, parseErr := strconv.ParseUint(identifier, 10, 64); parseErr == nil {
 		// 链上AuctionID
-		auction, err = h.service.GetAuctionByAuctionID(id)
+		auction, err = h.service.GetAuctionByAuctionID(ctx, id)
 		if err != nil {
 			// 尝试数据库ID
 			if dbID, parseErr2 := strconv.ParseUint(identifier, 10, 32); parseErr2 == nil {
-				auction, err = h.service.GetAuctionByID(uint(dbID))
+				auction, err = h.service.GetAuctionByID(ctx, uint(dbID))
 			}
 		}
 	}
@@ -219,6 +223,8 @@ func (h *AuctionHandler) CheckAuctionStatus(c *gin.Context) {
 // GetAuctionBids 获取拍卖的出价历史
 func (h *AuctionHandler) GetAuctionBids(c *gin.Context) {
 	idStr := c.Param("id")
+	ctx := c.Request.Context()
+
 	auctionID, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -242,7 +248,7 @@ func (h *AuctionHandler) GetAuctionBids(c *gin.Context) {
 		pageSize = 20
 	}
 
-	bids, total, err := h.service.GetAuctionBids(auctionID, page, pageSize)
+	bids, total, err := h.service.GetAuctionBids(ctx, auctionID, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
